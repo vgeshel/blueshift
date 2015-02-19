@@ -1,7 +1,7 @@
 (ns uswitch.blueshift.s3
   (:require [com.stuartsierra.component :refer (Lifecycle system-map using start stop)]
             [clojure.tools.logging :refer (info error warn debug errorf)]
-            [aws.sdk.s3 :refer (list-objects get-object delete-object)]
+            [amazonica.aws.s3 :as s3]
             [clojure.set :refer (difference)]
             [clojure.core.async :refer (go-loop thread put! chan >!! <!! >! <! alts!! timeout close!)]
             [clojure.edn :as edn]
@@ -30,24 +30,24 @@
 
 (defn listing
   [credentials bucket & opts]
-  (let [options (apply hash-map opts)]
+  (let [options (assoc (apply hash-map opts) :bucket-name bucket)]
     (loop [marker   nil
            results  nil]
-      (let [{:keys [next-marker truncated? objects]}
-            (list-objects credentials bucket (assoc options :marker marker))]
+      (let [{:keys [next-marker truncated? object-summaries]}
+            (s3/list-objects credentials (assoc options :marker marker))]
         (if (not truncated?)
-          (concat results objects)
-          (recur next-marker (concat results objects)))))))
+          (concat results object-summaries)
+          (recur next-marker (concat results object-summaries)))))))
 
 (defn files [credentials bucket directory]
   (listing credentials bucket :prefix directory))
 
 (defn directories
   ([credentials bucket]
-     (:common-prefixes (list-objects credentials bucket {:delimiter "/"})))
+     (:common-prefixes (s3/list-objects credentials {:bucket-name bucket :delimiter "/"})))
   ([credentials bucket path]
      {:pre [(.endsWith path "/")]}
-     (:common-prefixes (list-objects credentials bucket {:delimiter "/" :prefix path}))))
+     (:common-prefixes (s3/list-objects credentials {:bucket-name bucket :delimiter "/" :prefix path}))))
 
 (defn leaf-directories
   [credentials bucket]
@@ -73,7 +73,7 @@
   (letfn [(manifest? [{:keys [key]}]
             (re-matches #".*manifest\.edn$" key))]
     (when-let [manifest-file-key (:key (first (filter manifest? files)))]
-      (with-open [content (:content (get-object credentials bucket manifest-file-key))]
+      (with-open [content (:object-content (s3/get-object credentials :bucket-name bucket :key manifest-file-key))]
         (-> (read-edn content)
             (map->Manifest)
             (assoc-if-nil :strategy "merge")
@@ -120,14 +120,14 @@
     (try (time! import-timer
                 (redshift/load-table credentials url table-manifest))
          (info "Successfully imported" (count files) "files")
-         (delete-object credentials bucket key)
+         (s3/delete-object credentials :bucket-name bucket :key key)
          (dec! importing-files (count files))
          {:state :delete
           :files files}
          (catch java.sql.SQLException e
            (error e "Error loading into" (:table table-manifest))
            (error (:table table-manifest) "Redshift manifest content:" redshift-manifest)
-           (delete-object credentials bucket key)
+           (s3/delete-object credentials :bucket-name bucket :key key)
            (dec! importing-files (count files))
            {:state :scan
             :pause? true}))))
@@ -138,7 +138,7 @@
     (doseq [key files]
       (info "Deleting" (str "s3://" bucket "/" key))
       (try
-        (delete-object credentials bucket key)
+        (s3/delete-object credentials :bucket-name bucket :key key)
         (catch Exception e
           (warn "Couldn't delete" key "  - ignoring"))))
     {:state :scan, :pause? true}))
@@ -234,7 +234,7 @@
 (defn bucket-watcher
   "Creates a process watching for objects in S3 buckets."
   [config]
-  (map->BucketWatcher {:credentials (-> config :s3 :credentials)
+  (map->BucketWatcher {:credentials (get-in config [:s3 :credentials] {:endpoint nil})
                        :bucket (-> config :s3 :bucket)
                        :poll-interval-seconds (-> config :s3 :poll-interval :seconds)
                        :key-pattern (or (re-pattern (-> config :s3 :key-pattern))

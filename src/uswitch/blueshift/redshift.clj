@@ -1,8 +1,10 @@
 (ns uswitch.blueshift.redshift
-  (:require [aws.sdk.s3 :refer (put-object delete-object)]
+  (:require [amazonica.aws.s3 :as s3]
+            [amazonica.core :refer (get-credentials)]
             [cheshire.core :refer (generate-string)]
             [clojure.tools.logging :refer (info error debug)]
             [clojure.string :as s]
+            [clojure.java.io :as io]
             [com.stuartsierra.component :refer (system-map Lifecycle using)]
             [clojure.core.async :refer (chan <!! >!! close! thread)]
             [uswitch.blueshift.util :refer (close-channels)]
@@ -17,13 +19,16 @@
   {:entries (for [f files] {:url (str "s3://" bucket "/" f)
                             :mandatory true})})
 
+(defn- str->input-stream [^String s]
+  (io/input-stream (.getBytes s "utf-8")))
+
 (defn put-manifest
   "Uploads the manifest to S3 as JSON, returns the URL to the uploaded object.
    Manifest should be generated with uswitch.blueshift.redshift/manifest."
   [credentials bucket manifest]
   (let [file-name (str (UUID/randomUUID) ".manifest")
         s3-url (str "s3://" bucket "/" file-name)]
-    (put-object credentials bucket file-name (generate-string manifest))
+    (s3/put-object credentials :bucket-name bucket :key file-name :input-stream (str->input-stream (generate-string manifest)))
     {:key file-name
      :url s3-url}))
 
@@ -65,13 +70,21 @@
                              staging-table
                              target-table)))
 
-(defn copy-from-s3-stmt [table manifest-url {:keys [access-key secret-key] :as creds} {:keys [columns options] :as table-manifest}]
-  (prepare-statement (format "COPY %s (%s) FROM '%s' CREDENTIALS 'aws_access_key_id=%s;aws_secret_access_key=%s' %s manifest"
+(defn- creds->redshift [creds]
+  (let [{:keys [AWSAccessKeyId AWSSecretKey SessionToken]}
+        (-> creds get-credentials .getCredentials bean)]
+    (cond->
+     (format "aws_access_key_id=%s;aws_secret_access_key=%s" AWSAccessKeyId AWSSecretKey)
+
+     SessionToken
+     (str ";token=" SessionToken))))
+
+(defn copy-from-s3-stmt [table manifest-url creds {:keys [columns options] :as table-manifest}]
+  (prepare-statement (format "COPY %s (%s) FROM '%s' CREDENTIALS '%s' %s manifest"
                              table
                              (s/join "," columns)
                              manifest-url
-                             access-key
-                             secret-key
+                             (creds->redshift creds)
                              (s/join " " options))))
 
 (defn truncate-table-stmt [target-table]

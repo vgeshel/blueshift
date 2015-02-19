@@ -8,17 +8,19 @@
                  [com.stuartsierra/component "0.2.1"]
                  [org.clojure/core.async "0.1.303.0-886421-alpha"]
                  [org.clojure/tools.cli "0.3.1"]
-                 [clj-aws-s3 "0.3.9" :exclusions [commons-logging commons-codec joda-time]]
+                 ;; [clj-aws-s3 "0.3.9" :exclusions [commons-logging commons-codec joda-time com.amazonaws/aws-java-sdk
+                 ;;                                  com.fasterxml.jackson.core/jackson-core]]
+                 [amazonica "0.3.14" :exclusions [com.fasterxml.jackson.core/jackson-core]]
                  [joda-time "2.6"]
                  [commons-codec "1.3"]
                  [org.slf4j/jcl-over-slf4j "1.7.7"]
-                 [cheshire "5.3.1"]
+                 [cheshire "5.4.0"]
                  [postgresql "8.0-318.jdbc3"]
                  [prismatic/schema "0.2.2"]
                  [metrics-clojure "2.0.2"]
                  [com.codahale.metrics/metrics-jvm "3.0.2"]]
   :profiles {:dev {:dependencies [[org.slf4j/slf4j-simple "1.7.7"]
-                                  [org.clojure/tools.namespace "0.2.3"]]
+                                  [org.clojure/tools.namespace "0.2.5"]]
                    :source-paths ["./dev"]
                    :jvm-opts ["-Dorg.slf4j.simpleLogger.defaultLogLevel=debug"
                               "-Dorg.slf4j.simpleLogger.log.org.apache.http=info"
